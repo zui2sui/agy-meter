@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta http-equiv="Content-Security-Policy" content="frame-src 'none'; child-src 'none'">
+  <title>AGY Meter</title>
+  <script src="/preload.js"></script>
+  <link rel="stylesheet" href="/styles.css?v=14">
+</head>
+<body>
+  <div id="app" class="pane-shell">
+    <header class="top-chrome">
+      <div class="toolbar-row">
+        <div class="session-selector-wrap">
+          <button type="button" id="session-picker-btn" class="session-picker-btn" aria-haspopup="listbox" aria-expanded="false" title="切换或搜索历史会话">
+            <span id="follow-pill" class="follow-dot is-following" title="自动跟随当前会话"></span>
+            <span id="current-session-title" class="session-title-text">加载中…</span>
+            <svg class="icon chevron-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 6.25 8 9.75l3.5-3.5"/></svg>
+          </button>
+          <div id="session-dropdown" class="session-dropdown hidden" role="dialog" aria-label="选择会话">
+            <div class="dropdown-search-row">
+              <label for="session-search-input" id="session-search-label" class="visually-hidden">搜索会话</label>
+              <input type="search" id="session-search-input" class="session-search-input" placeholder="搜索会话…" autocomplete="off">
+              <button type="button" id="follow-reset-btn" class="mini-btn">跟随当前</button>
+            </div>
+            <div id="session-list" class="session-list" role="listbox" aria-label="会话列表"></div>
+          </div>
+        </div>
+        <div class="seg-control" role="group" id="price-seg-group" aria-label="计价口径">
+          <button type="button" id="price-mode-effective" class="seg-btn is-active" data-price-mode="effective" aria-pressed="true" title="按官方公开 API 当前生效价（含限时折扣）估算">当前价</button>
+          <button type="button" id="price-mode-standard" class="seg-btn" data-price-mode="standard" aria-pressed="false" title="按官方公开 API 无折扣标准原价估算">原价</button>
+        </div>
+        <div class="seg-control lang-seg" role="group" id="lang-seg-group" aria-label="界面语言">
+          <button type="button" id="lang-zh" class="seg-btn is-active" data-lang="zh" lang="zh-CN" aria-pressed="true" aria-label="中 (中文)" title="切换为中文">中</button>
+          <button type="button" id="lang-en" class="seg-btn" data-lang="en" lang="en" aria-pressed="false" aria-label="EN (English)" title="Switch to English">EN</button>
+        </div>
+        <button type="button" id="refresh-btn" class="icon-btn" aria-label="刷新" title="刷新">
+          <span id="live-dot" class="live-dot" aria-hidden="true"></span>
+        </button>
+      </div>
+
+      <div id="quota-strip" class="quota-strip" aria-live="polite"></div>
+
+      <div class="tablist" role="tablist" id="main-tablist" aria-label="视图">
+        <button type="button" role="tab" id="tab-session" class="tab" data-tab="session" aria-selected="true" aria-controls="panel-session" tabindex="0">会话</button>
+        <button type="button" role="tab" id="tab-tree" class="tab" data-tab="tree" aria-selected="false" aria-controls="panel-tree" tabindex="-1"><span id="tab-tree-label">子智能体</span> <span id="tree-count-badge" class="tab-badge hidden"></span></button>
+        <button type="button" role="tab" id="tab-global" class="tab" data-tab="global" aria-selected="false" aria-controls="panel-global" tabindex="-1">全局</button>
+      </div>
+    </header>
+
+    <main>
+      <section role="tabpanel" id="panel-session" aria-labelledby="tab-session">
+        <div id="session-view" class="panel-body"><div class="empty" id="initial-empty">加载中…</div></div>
+      </section>
+      <section role="tabpanel" id="panel-tree" aria-labelledby="tab-tree" hidden="until-found">
+        <div id="tree-view" class="panel-body"></div>
+      </section>
+      <section role="tabpanel" id="panel-global" aria-labelledby="tab-global" hidden="until-found">
+        <div id="global-view" class="panel-body"></div>
+      </section>
+    </main>
+  </div>
+  <script src="/app.js?v=14"></script>
+</body>
+</html>

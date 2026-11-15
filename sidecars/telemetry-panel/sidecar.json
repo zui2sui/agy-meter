@@ -1,0 +1,18 @@
+{
+  "command": "node",
+  "args": ["--no-warnings", "main.mjs"],
+  "restart_policy": "always",
+  "display_name": "AGY Meter",
+  "description": "Bilingual (中 / EN) local read-only telemetry panel for token speed (tok/s), backend model ID, auto/manual context compaction & cache trends, public API USD cost estimates, and 5h + weekly + Pro Argon quota valuation.",
+  "has_web_ui": true,
+  "ui_config": {
+    "display_name": "AGY Meter",
+    "views": [
+      {
+        "path": "/",
+        "entrypoint": "SIDECAR_UI_ENTRYPOINT_AUX_PANE",
+        "title": "AGY Meter"
+      }
+    ]
+  }
+}

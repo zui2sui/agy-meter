@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" fill="none">
+  <!-- Transparent background with ~12.5% margin around artwork (bounds 16..112) -->
+  <!-- Outer subtle track arc -->
+  <path
+    d="M 26.5 88.5 A 45 45 0 1 1 101.5 88.5"
+    stroke="#64748b"
+    stroke-opacity="0.35"
+    stroke-width="10"
+    stroke-linecap="round"
+  />
+  <!-- High-contrast cyan speed arc (left to top-right) -->
+  <path
+    d="M 26.5 88.5 A 45 45 0 0 1 92.2 31.4"
+    stroke="#06b6d4"
+    stroke-width="10"
+    stroke-linecap="round"
+  />
+  <!-- Amber peak velocity accent segment -->
+  <path
+    d="M 97.5 36.8 A 45 45 0 0 1 101.5 88.5"
+    stroke="#f59e0b"
+    stroke-width="10"
+    stroke-linecap="round"
+  />
+  <!-- Speedometer needle pointing toward amber peak -->
+  <line
+    x1="64"
+    y1="70"
+    x2="92"
+    y2="46"
+    stroke="#f59e0b"
+    stroke-width="6"
+    stroke-linecap="round"
+  />
+  <circle cx="64" cy="70" r="7" fill="#06b6d4" />
+  <!-- Telemetry pulse bars at base -->
+  <rect x="40" y="92" width="8" height="14" rx="3" fill="#06b6d4" />
+  <rect x="53" y="84" width="8" height="22" rx="3" fill="#06b6d4" />
+  <rect x="66" y="88" width="8" height="18" rx="3" fill="#06b6d4" />
+  <rect x="79" y="80" width="8" height="26" rx="3" fill="#f59e0b" />
+</svg>

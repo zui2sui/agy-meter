@@ -1,0 +1,16 @@
+# OS & Editor metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*~
+.vscode/
+.idea/
+
+# Runtime / build / archive artifacts
+node_modules/
+*.log
+*.zip
+*.tgz
+.env
+.env.*

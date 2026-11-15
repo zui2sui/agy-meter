@@ -1,0 +1,25 @@
+{
+  "name": "agy-meter",
+  "displayName": "AGY Meter",
+  "version": "1.2.0",
+  "description": "本地只读遥测与额度计量面板：实时监控流式/端到端 Token 速度 (tok/s)、底层路由模型 ID、上下文水位与压缩趋势、缓存命中率、公开 API 等效成本估算，以及套餐 5h / 周 / Pro Argon 额度折算。",
+  "logo": "assets/logo.svg",
+  "suggestedPrompts": [
+    "打开 AGY Meter 面板查看当前会话输出速度与套餐额度折算",
+    "查看当前会话的底层路由模型 ID、上下文水位趋势与等效 API 成本构成",
+    "对比各底层模型在近 7 天的稳态流式解码速度与缓存命中率"
+  ],
+  "author": {
+    "name": "zui2sui"
+  },
+  "repository": "https://github.com/zui2sui/agy-meter",
+  "license": "MIT",
+  "keywords": [
+    "telemetry",
+    "token-speed",
+    "quota",
+    "context-window",
+    "cost",
+    "sidecar"
+  ]
+}
