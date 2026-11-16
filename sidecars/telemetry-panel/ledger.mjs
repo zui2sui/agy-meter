@@ -102,6 +102,25 @@ export function readAuthBoundariesFromLsLog(logPath = resolveLsLogPath(), nowMs 
 }
 
 /**
+ * Resolves the user-facing subscription tier label (e.g. 'Ultra', 'Pro', 'Free').
+ * Prioritizes `userTier.name` and `userTier.id` because Google AI Ultra tiers
+ * (e.g. `g1-ultra-lite-tier`) still report `planInfo.planName: 'Pro'` in backend metadata.
+ */
+export function resolvePlanName(rawStatus) {
+  if (!rawStatus || typeof rawStatus !== 'object') return 'Plan';
+  const tierId = String(rawStatus.userTier?.id || rawStatus.planStatus?.planInfo?.teamsTier || '').trim();
+  const tierName = String(rawStatus.userTier?.name || '').replace(/^Google AI\s+/i, '').trim();
+  const planInfoName = String(rawStatus.planStatus?.planInfo?.planName || '').replace(/^Google AI\s+/i, '').trim();
+  let plan = tierName || planInfoName || 'Plan';
+  if (/ultra/i.test(tierId) && !/ultra/i.test(plan)) {
+    plan = 'Ultra';
+  } else if (/pro/i.test(tierId) && plan === 'Plan') {
+    plan = 'Pro';
+  }
+  return plan;
+}
+
+/**
  * Derives an anonymized, collision-disambiguated account identity from `GetUserStatus.userStatus`.
  * Returns `null` when user status indicates signed-out / unauthenticated.
  */
@@ -114,24 +133,19 @@ export function deriveAccountIdentity(rawStatus, accountsRegistry = {}) {
   const keyInput = emailNorm || `tier:${tierId}`;
   const accountKey = createHash('sha256').update(keyInput).digest('hex').slice(0, 16);
 
-  const rawPlan = String(
-    rawStatus.planStatus?.planInfo?.planName ||
-    rawStatus.userTier?.name ||
-    'Plan'
-  ).replace(/^Google AI\s+/i, '').trim() || 'Plan';
+  const rawPlan = resolvePlanName(rawStatus);
 
   const localPart = emailNorm.includes('@') ? emailNorm.split('@')[0] : '';
   const maskedHint = localPart ? `${localPart.slice(0, Math.min(2, localPart.length))}***` : '';
 
   const baseLabel = maskedHint ? `${rawPlan} (${maskedHint})` : rawPlan;
-  const existing = accountsRegistry[accountKey];
-  let accountLabel = existing?.accountLabel || baseLabel;
+  let accountLabel = baseLabel;
 
   // Disambiguate if a different account shares identical plan + 2-char masked prefix
   const hasCollision = Object.entries(accountsRegistry).some(
     ([k, meta]) => k !== accountKey && meta && meta.accountLabel === baseLabel
   );
-  if (hasCollision && !accountLabel.includes('#')) {
+  if (hasCollision) {
     accountLabel = `${rawPlan} (${maskedHint || 'acct'}#${accountKey.slice(0, 2)})`;
   }
 
@@ -400,9 +414,10 @@ export function syncLedgerState(ledger, {
 
 /**
  * Ensures pre-v1.3 quota history records without an `accountKey` are quarantined as `'legacy'`
- * so another account's historical estimates are never matched as per-account fallback.
+ * so another account's historical estimates are never matched as per-account fallback,
+ * and keeps stored account labels/plans aligned with the latest account registry.
  */
-export function normalizeQuotaHistoryEntries(entries) {
+export function normalizeQuotaHistoryEntries(entries, accountsRegistry = {}) {
   if (!Array.isArray(entries)) return { entries: [], mutated: false };
   let mutated = false;
   const out = entries.map((h) => {
@@ -410,6 +425,19 @@ export function normalizeQuotaHistoryEntries(entries) {
     if (!h.accountKey) {
       mutated = true;
       return { ...h, accountKey: 'legacy', accountLabel: '' };
+    }
+    const acctMeta = accountsRegistry?.[h.accountKey];
+    if (
+      acctMeta &&
+      ((acctMeta.accountLabel && h.accountLabel !== acctMeta.accountLabel) ||
+        (acctMeta.planName && h.planName !== acctMeta.planName))
+    ) {
+      mutated = true;
+      return {
+        ...h,
+        accountLabel: acctMeta.accountLabel || h.accountLabel,
+        planName: acctMeta.planName || h.planName,
+      };
     }
     return h;
   });

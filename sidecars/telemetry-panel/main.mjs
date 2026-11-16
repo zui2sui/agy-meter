@@ -18,6 +18,7 @@ import {
   normalizeQuotaHistoryEntries,
   readAuthBoundariesFromLsLog,
   resolveLsLogPath,
+  resolvePlanName,
   saveLedger,
   syncLedgerState,
 } from './ledger.mjs';
@@ -1565,7 +1566,7 @@ async function computeQuotaSnapshot(force = false) {
     syncRes = syncAttributionLedger(src, Date.now() / 1000);
   }
 
-  const normalized = normalizeQuotaHistoryEntries(readQuotaHistory());
+  const normalized = normalizeQuotaHistoryEntries(readQuotaHistory(), ledgerState.accounts);
   const history = normalized.entries;
   let historyDirty = normalized.mutated;
 
@@ -1589,7 +1590,7 @@ async function computeQuotaSnapshot(force = false) {
     };
   }
 
-  const planName = account?.planName || String(src.rawStatus?.planStatus?.planInfo?.planName || 'Plan');
+  const planName = account?.planName || resolvePlanName(src.rawStatus);
   const grouped = new Map();
 
   const ensurePool = (poolKey) => {
@@ -2037,7 +2038,7 @@ app.api('/api/session', async (data) => {
     detail?.liveState?.state || 'idle',
     Math.floor((detail?.liveState?.elapsedSec || 0)),
     tree?.totals?.genCount || 0,
-    quota.activeAccount?.accountKey || (quota.signedOut ? 'signed_out' : ''),
+    `${quota.activeAccount?.accountKey || (quota.signedOut ? 'signed_out' : '')}:${quota.activeAccount?.accountLabel || ''}`,
     quota.fetchedAtIso || '',
     quotaSig,
   ].join('|');
