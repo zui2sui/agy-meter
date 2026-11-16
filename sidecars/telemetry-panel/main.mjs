@@ -2024,6 +2024,13 @@ app.api('/api/session', async (data) => {
   const tree = buildSubagentTree(targetId, meta);
   const summaryMeta = meta.byId.get(targetId) || null;
 
+  const quotaSig = (quota.pools || [])
+    .map((p) =>
+      (p.buckets || [])
+        .map((b) => `${b.genCount || 0}:${Math.round((b.spendEffective || 0) * 10000)}:${Math.round((b.remainingFraction ?? -1) * 1000)}`)
+        .join(','),
+    )
+    .join(';');
   const etag = [
     targetId,
     detail?.sig || 'none',
@@ -2032,6 +2039,7 @@ app.api('/api/session', async (data) => {
     tree?.totals?.genCount || 0,
     quota.activeAccount?.accountKey || (quota.signedOut ? 'signed_out' : ''),
     quota.fetchedAtIso || '',
+    quotaSig,
   ].join('|');
 
   const uiBuild = computeUiBuild();

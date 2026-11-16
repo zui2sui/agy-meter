@@ -350,11 +350,21 @@ export function syncLedgerState(ledger, {
     }
 
     let stalledOnIncompleteTs = false;
-    for (const g of gens) {
+    for (let i = 0; i < gens.length; i++) {
+      const g = gens[i];
       if (g.genIdx < convEntry.nextGenIdx) continue;
       if (!(g.createdAt > 0)) {
-        stalledOnIncompleteTs = true;
-        break;
+        const tok = (g.inputTokens || 0) + (g.cacheReadTokens || 0) + (g.outputTokens || 0);
+        const isTail = i === gens.length - 1;
+        const isFreshFile = item.mtimeMs > 0 && nowSec - item.mtimeMs / 1000 < 30;
+        if (isTail && tok > 0 && isFreshFile) {
+          stalledOnIncompleteTs = true;
+          break;
+        }
+        // Permanently unlinked / empty placeholder gen_metadata (stepIdxs=[]) — record null and advance
+        appendGenAttribution(convEntry, g.genIdx, null);
+        dirty = true;
+        continue;
       }
       const refTs = g.completedAt > 0 ? g.completedAt : g.createdAt;
       let assignKey = null;
