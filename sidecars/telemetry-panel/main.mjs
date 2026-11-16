@@ -11,18 +11,29 @@ import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { Response, SidecarApp } from 'sidecar_sdk';
+import {
+  evaluateBucketValuation,
+  loadLedger,
+  lookupGenAccount,
+  normalizeQuotaHistoryEntries,
+  readAuthBoundariesFromLsLog,
+  resolveLsLogPath,
+  saveLedger,
+  syncLedgerState,
+} from './ledger.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 function computeUiBuild() {
-  return ['main.mjs', 'index.html', 'styles.css', 'app.js']
+  return ['main.mjs', 'ledger.mjs', 'index.html', 'styles.css', 'app.js']
     .map((f) => {
       try { return Math.trunc(statSync(join(__dirname, f)).mtimeMs); } catch { return 0; }
     })
     .join('-');
 }
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PROCESS_STARTED_AT_SEC = Date.now() / 1000;
 
 // ---------------------------------------------------------------------------
 // Paths & Persistent Sidecar Data Dir
@@ -53,6 +64,8 @@ function resolveSidecarDataDir(appDataDir) {
 const APP_DATA_DIR = resolveAppDataDir();
 const SIDECAR_DATA_DIR = resolveSidecarDataDir(APP_DATA_DIR);
 const QUOTA_HISTORY_PATH = join(SIDECAR_DATA_DIR, 'quota_history.json');
+const ACCOUNT_LEDGER_PATH = join(SIDECAR_DATA_DIR, 'account_ledger.json');
+const LS_LOG_PATH = resolveLsLogPath();
 
 // ---------------------------------------------------------------------------
 // BigInt-safe Protobuf Wire Parser (Read-Only)
@@ -1294,10 +1307,19 @@ function searchConversations(queryStr = '', limit = 40) {
 }
 
 // ---------------------------------------------------------------------------
-// 5-Hour & Weekly Plan Quota + Dollar Equivalence (`RetrieveUserQuotaSummary`)
+// 5-Hour & Weekly Plan Quota + Multi-Account Attribution (`RetrieveUserQuotaSummary`)
 // ---------------------------------------------------------------------------
 
-let quotaCache = { fetchedAtMs: 0, summaryGroups: null, rawStatus: null, lastGenTotal: -1 };
+let quotaCache = {
+  fetchedAtMs: 0,
+  summaryGroups: null,
+  rawStatus: null,
+  explicitSignedOut: false,
+  lastGenTotal: -1,
+};
+let quotaInFlight = null;
+
+const { ledger: ledgerState } = loadLedger(ACCOUNT_LEDGER_PATH, PROCESS_STARTED_AT_SEC);
 
 function readQuotaHistory() {
   try {
@@ -1319,49 +1341,87 @@ function saveQuotaHistory(entries) {
 }
 
 async function callLsRpc(lsAddr, csrf, method) {
-  const res = await fetch(
-    `http://${lsAddr}/exa.language_server_pb.LanguageServerService/${method}`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Connect-Protocol-Version': '1',
-        'x-codeium-csrf-token': csrf,
-      },
-      body: '{}',
-      signal: AbortSignal.timeout(3500),
+  try {
+    const res = await fetch(
+      `http://${lsAddr}/exa.language_server_pb.LanguageServerService/${method}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Connect-Protocol-Version': '1',
+          'x-codeium-csrf-token': csrf,
+        },
+        body: '{}',
+        signal: AbortSignal.timeout(3500),
+      }
+    );
+    if (!res.ok) {
+      let bodyText = '';
+      try { bodyText = (await res.text()).slice(0, 240); } catch { /* ignore */ }
+      const signedOut = res.status === 401 || /not logged|unauth|token source/i.test(bodyText);
+      return { ok: false, status: res.status, signedOut, data: null };
     }
-  );
-  if (!res.ok) return null;
-  return res.json();
+    return { ok: true, status: res.status, signedOut: false, data: await res.json() };
+  } catch {
+    return { ok: false, status: 0, signedOut: false, data: null };
+  }
 }
 
 async function fetchLsQuotaSources(force = false) {
   const now = Date.now();
-  if (!force && (quotaCache.summaryGroups || quotaCache.rawStatus) && now - quotaCache.fetchedAtMs < 12_000) {
-    return quotaCache;
+  if (!force && !quotaCache.explicitSignedOut && (quotaCache.summaryGroups || quotaCache.rawStatus) && now - quotaCache.fetchedAtMs < 12_000) {
+    return { ...quotaCache, statusFetched: true };
   }
   const lsAddr = process.env.ANTIGRAVITY_LS_ADDRESS;
   const csrf = process.env.ANTIGRAVITY_CSRF_TOKEN;
-  if (!lsAddr || !csrf) return quotaCache;
+  if (!lsAddr || !csrf) return { ...quotaCache, statusFetched: false };
 
   const [sumRes, statusRes] = await Promise.allSettled([
     callLsRpc(lsAddr, csrf, 'RetrieveUserQuotaSummary'),
     callLsRpc(lsAddr, csrf, 'GetUserStatus'),
   ]);
 
-  if (sumRes.status === 'fulfilled' && sumRes.value) {
-    const groups = sumRes.value?.response?.groups || sumRes.value?.groups;
+  let statusFetched = false;
+  if (statusRes.status === 'fulfilled') {
+    const sr = statusRes.value;
+    if (sr.ok) {
+      statusFetched = true;
+      const nextStatus = sr.data?.userStatus || null;
+      const prevEmail = String(quotaCache.rawStatus?.email || '').trim().toLowerCase();
+      const nextEmail = String(nextStatus?.email || '').trim().toLowerCase();
+      const prevTier = String(quotaCache.rawStatus?.userTier?.id || '');
+      const nextTier = String(nextStatus?.userTier?.id || '');
+
+      if (!nextStatus || (!nextEmail && !nextTier)) {
+        quotaCache.explicitSignedOut = true;
+        quotaCache.summaryGroups = null;
+        quotaCache.rawStatus = null;
+      } else {
+        if ((prevEmail && nextEmail && prevEmail !== nextEmail) || (prevTier && nextTier && prevTier !== nextTier)) {
+          quotaCache.summaryGroups = null;
+        }
+        quotaCache.explicitSignedOut = false;
+        quotaCache.rawStatus = nextStatus;
+      }
+      quotaCache.fetchedAtMs = now;
+    } else if (sr.signedOut) {
+      statusFetched = true;
+      quotaCache.explicitSignedOut = true;
+      quotaCache.summaryGroups = null;
+      quotaCache.rawStatus = null;
+      quotaCache.fetchedAtMs = now;
+    }
+  }
+
+  if (sumRes.status === 'fulfilled' && sumRes.value?.ok && !quotaCache.explicitSignedOut) {
+    const groups = sumRes.value.data?.response?.groups || sumRes.value.data?.groups;
     if (Array.isArray(groups) && groups.length > 0) {
       quotaCache.summaryGroups = groups;
       quotaCache.fetchedAtMs = now;
     }
   }
-  if (statusRes.status === 'fulfilled' && statusRes.value?.userStatus) {
-    quotaCache.rawStatus = statusRes.value.userStatus;
-    quotaCache.fetchedAtMs = now;
-  }
-  return quotaCache;
+
+  return { ...quotaCache, statusFetched };
 }
 
 function listAllConversationIds() {
@@ -1376,7 +1436,57 @@ function listAllConversationIds() {
   }
 }
 
-function sumAllBucketSpends(specs) {
+function maxConvMtimeMs(convDir, id) {
+  const dbPath = join(convDir, `${id}.db`);
+  try {
+    let m = statSync(dbPath).mtimeMs;
+    try {
+      const wm = statSync(`${dbPath}-wal`).mtimeMs;
+      if (wm > m) m = wm;
+    } catch { /* no wal */ }
+    return m;
+  } catch {
+    return 0;
+  }
+}
+
+function syncAttributionLedger(src, nowSec = Date.now() / 1000) {
+  const convDir = join(APP_DATA_DIR, 'conversations');
+  const convEntries = [];
+
+  for (const id of listAllConversationIds()) {
+    const mtimeMs = maxConvMtimeMs(convDir, id);
+    if (!mtimeMs) continue;
+    const existing = ledgerState.conversations?.[id];
+    if (existing && mtimeMs <= existing.mtimeMs) continue;
+    convEntries.push({
+      convId: id,
+      mtimeMs,
+      getGens: () => getLightConversation(id)?.gens || [],
+    });
+  }
+
+  const rawStatusArg = src.statusFetched
+    ? (src.explicitSignedOut ? null : src.rawStatus)
+    : undefined;
+
+  const authBoundaries = readAuthBoundariesFromLsLog(LS_LOG_PATH, nowSec * 1000);
+  const res = syncLedgerState(ledgerState, {
+    rawStatus: rawStatusArg,
+    explicitSignedOut: Boolean(src.explicitSignedOut),
+    nowSec,
+    processStartedAtSec: PROCESS_STARTED_AT_SEC,
+    authBoundaries,
+    convEntries,
+  });
+
+  if (res.dirty) {
+    saveLedger(ACCOUNT_LEDGER_PATH, SIDECAR_DATA_DIR, ledgerState);
+  }
+  return res;
+}
+
+function sumAllBucketSpends(specs, targetAccountKey) {
   const totals = new Map();
   let earliestStartSec = Infinity;
   for (const sp of specs) {
@@ -1390,31 +1500,33 @@ function sumAllBucketSpends(specs) {
     });
     if (sp.winStartSec < earliestStartSec) earliestStartSec = sp.winStartSec;
   }
-  if (!specs.length) return totals;
+  if (!specs.length || !targetAccountKey) return totals;
 
   const convDir = join(APP_DATA_DIR, 'conversations');
+  const minEffectiveSec = Math.max(earliestStartSec, ledgerState.trackingStartedAtSec);
+
   for (const id of listAllConversationIds()) {
-    const dbPath = join(convDir, `${id}.db`);
-    let maxMtimeSec = 0;
-    try {
-      maxMtimeSec = statSync(dbPath).mtimeMs / 1000;
-      try {
-        const wm = statSync(`${dbPath}-wal`).mtimeMs / 1000;
-        if (wm > maxMtimeSec) maxMtimeSec = wm;
-      } catch { /* no wal */ }
-      if (maxMtimeSec < earliestStartSec - 300) continue;
-    } catch {
-      continue;
-    }
+    const maxMtimeSec = maxConvMtimeMs(convDir, id) / 1000;
+    if (!maxMtimeSec || maxMtimeSec < minEffectiveSec - 300) continue;
+
+    const convLedger = ledgerState.conversations?.[id];
+    if (!convLedger || !Array.isArray(convLedger.ranges)) continue;
+    // Fast skip if this conversation has zero ranges attributed to targetAccountKey
+    if (!convLedger.ranges.some((r) => r.accountKey === targetAccountKey)) continue;
 
     const light = getLightConversation(id);
     if (!light || !light.gens.length) continue;
+
     for (const sp of specs) {
       if (maxMtimeSec < sp.winStartSec - 300) continue;
+      if (sp.winEndSec < ledgerState.trackingStartedAtSec) continue;
       const acc = totals.get(sp.id);
+
       for (const g of light.gens) {
         if (sp.matchPools ? !sp.matchPools.has(g.poolKey) : g.poolKey !== sp.poolKey) continue;
-        if (g.createdAt >= sp.winStartSec && g.createdAt <= sp.winEndSec + 60) {
+        if (lookupGenAccount(ledgerState, id, g.genIdx) !== targetAccountKey) continue;
+        const refTs = g.completedAt > 0 ? g.completedAt : g.createdAt;
+        if (refTs >= sp.winStartSec && g.createdAt >= sp.winStartSec - 60 && g.createdAt <= sp.winEndSec + 60) {
           acc.genCount++;
           acc.inputTokens += g.inputTokens;
           acc.cacheReadTokens += g.cacheReadTokens;
@@ -1442,14 +1554,42 @@ function resolveQuotaPoolKey(text = '', bucketIds = '') {
   return 'claude';
 }
 
-async function getQuotaSnapshot(force = false) {
-  const src = await fetchLsQuotaSources(force);
-  const history = readQuotaHistory();
-  if (!src.summaryGroups && !src.rawStatus) {
-    return { available: false, pools: [], planName: '', history };
+async function computeQuotaSnapshot(force = false) {
+  let src = await fetchLsQuotaSources(force);
+  const nowSec = Date.now() / 1000;
+  let syncRes = syncAttributionLedger(src, nowSec);
+
+  // If account changed since cached quota groups were fetched, immediately force-refresh RPCs
+  if (syncRes.accountChanged && !force) {
+    src = await fetchLsQuotaSources(true);
+    syncRes = syncAttributionLedger(src, Date.now() / 1000);
   }
 
-  const planName = String(src.rawStatus?.planStatus?.planInfo?.planName || 'Plan');
+  const normalized = normalizeQuotaHistoryEntries(readQuotaHistory());
+  const history = normalized.entries;
+  let historyDirty = normalized.mutated;
+
+  const account = syncRes.activeAccount;
+  const accountKey = account?.accountKey || '';
+  const knownAccountCount = Object.keys(ledgerState.accounts || {}).length;
+
+  if (src.explicitSignedOut || (!src.summaryGroups && !src.rawStatus)) {
+    if (historyDirty) saveQuotaHistory(history);
+    return {
+      available: false,
+      signedOut: Boolean(src.explicitSignedOut),
+      planName: '',
+      account: null,
+      activeAccount: null,
+      knownAccountCount,
+      trackingStartedAtSec: ledgerState.trackingStartedAtSec,
+      pools: [],
+      history: [],
+      allHistory: history.slice(0, 36),
+    };
+  }
+
+  const planName = account?.planName || String(src.rawStatus?.planStatus?.planInfo?.planName || 'Plan');
   const grouped = new Map();
 
   const ensurePool = (poolKey) => {
@@ -1507,7 +1647,6 @@ async function getQuotaSnapshot(force = false) {
     }
   }
 
-  const nowSec = Date.now() / 1000;
   // On Pro plans Argon has its own bucket; on Ultra plans Argon shares the Gemini bucket
   const hasSeparateArgon = grouped.has('argon');
   const spendSpecs = [];
@@ -1544,9 +1683,9 @@ async function getQuotaSnapshot(force = false) {
     if (poolSpecs.length) specsByPool.set(poolKey, { pool: p, poolSpecs });
   }
 
-  const spendMap = sumAllBucketSpends(spendSpecs);
+  const spendMap = sumAllBucketSpends(spendSpecs, accountKey);
   const pools = [];
-  let historyDirty = false;
+  let ledgerDirty = false;
 
   for (const poolKey of QUOTA_POOL_ORDER) {
     const entry = specsByPool.get(poolKey);
@@ -1555,42 +1694,58 @@ async function getQuotaSnapshot(force = false) {
 
     const builtBuckets = [];
     for (const { id: specId, win, rb, resetSec, winStartSec } of poolSpecs) {
-      const usedFraction = Math.max(0, 1 - rb.remainingFraction);
-      const minThreshold = win === 'weekly' ? 0.005 : 0.01;
-
       const winUsage = spendMap.get(specId) || {
         genCount: 0, inputTokens: 0, cacheReadTokens: 0, outputTokens: 0, spendEffective: 0, spendStandard: 0,
       };
-      const sampleReady = usedFraction >= minThreshold && winUsage.spendEffective > 0;
-      const fullValueEffective = sampleReady ? winUsage.spendEffective / usedFraction : null;
-      const fullValueStandard = sampleReady ? winUsage.spendStandard / usedFraction : null;
+      const valuation = evaluateBucketValuation({
+        ledger: ledgerState,
+        account,
+        poolKey,
+        win,
+        rb,
+        winStartSec,
+        winUsage,
+        nowSec,
+      });
+      if (valuation.baselineMutated) ledgerDirty = true;
 
-      const prevRecord = history.find(
-        (h) => h.poolKey === poolKey && (h.windowType || '5h') === win && h.fullValueEffective > 0
-      ) || null;
+      const prevRecord = accountKey
+        ? (history.find(
+            (h) => h.accountKey === accountKey && h.poolKey === poolKey && (h.windowType || '5h') === win && h.fullValueEffective > 0
+          ) || null)
+        : null;
 
-      if (sampleReady && rb.resetTime) {
-        const histKey = `${poolKey}|${win}|${rb.resetTime}`;
-        const legacyKey = win === '5h' ? `${poolKey}|${rb.resetTime}` : '';
-        const existingIdx = history.findIndex((h) => h.key === histKey || (legacyKey && h.key === legacyKey));
+      if (valuation.sampleReady && rb.resetTime && accountKey) {
+        const histKey = `${accountKey}|${poolKey}|${win}|${rb.resetTime}`;
+        const existingIdx = history.findIndex((h) => h.key === histKey);
         const record = {
           key: histKey,
+          accountKey,
+          accountLabel: account.accountLabel,
+          planName: account.planName,
           poolKey,
           poolTitle: p.title,
           windowType: win,
           windowStartIso: new Date(winStartSec * 1000).toISOString(),
           resetTimeIso: rb.resetTime,
           updatedAtIso: new Date().toISOString(),
-          usedFraction,
+          usedFraction: valuation.usedFraction,
+          isPartialWindow: valuation.isPartialWindow,
+          baselineUsedFraction: valuation.baselineUsedFraction,
+          deltaUsedFraction: valuation.deltaUsedFraction,
           genCount: winUsage.genCount,
-          spendEffective: winUsage.spendEffective,
-          spendStandard: winUsage.spendStandard,
-          fullValueEffective,
-          fullValueStandard,
+          spendEffective: valuation.spendEffectiveForHistory,
+          spendStandard: valuation.spendStandardForHistory,
+          fullValueEffective: valuation.fullValueEffective,
+          fullValueStandard: valuation.fullValueStandard,
         };
         if (existingIdx >= 0) {
           const prev = history[existingIdx];
-          if (prev.key !== histKey || Math.abs(prev.usedFraction - usedFraction) > 0.0005 || prev.genCount !== winUsage.genCount) {
+          if (
+            Math.abs((prev.usedFraction || 0) - valuation.usedFraction) > 0.0005 ||
+            prev.genCount !== winUsage.genCount ||
+            prev.accountLabel !== account.accountLabel
+          ) {
             history[existingIdx] = record;
             historyDirty = true;
           }
@@ -1604,7 +1759,9 @@ async function getQuotaSnapshot(force = false) {
         window: win,
         label: win === 'weekly' ? '周' : '5h',
         remainingFraction: rb.remainingFraction,
-        usedFraction,
+        usedFraction: valuation.usedFraction,
+        isPartialWindow: valuation.isPartialWindow,
+        deltaUsedFraction: valuation.deltaUsedFraction,
         resetTimeIso: rb.resetTime,
         windowStartSec: winStartSec,
         resetSec,
@@ -1615,9 +1772,9 @@ async function getQuotaSnapshot(force = false) {
         outputTokens: winUsage.outputTokens,
         spendEffective: winUsage.spendEffective,
         spendStandard: winUsage.spendStandard,
-        sampleReady,
-        fullValueEffective,
-        fullValueStandard,
+        sampleReady: valuation.sampleReady,
+        fullValueEffective: valuation.fullValueEffective,
+        fullValueStandard: valuation.fullValueStandard,
         fallbackFullEffective: prevRecord?.fullValueEffective ?? null,
         fallbackFullStandard: prevRecord?.fullValueStandard ?? null,
       });
@@ -1635,25 +1792,47 @@ async function getQuotaSnapshot(force = false) {
     });
   }
 
+  if (ledgerDirty) {
+    saveLedger(ACCOUNT_LEDGER_PATH, SIDECAR_DATA_DIR, ledgerState);
+  }
   if (historyDirty) {
     history.sort((a, b) => String(b.updatedAtIso || b.resetTimeIso).localeCompare(String(a.updatedAtIso || a.resetTimeIso)));
     saveQuotaHistory(history);
   }
 
+  const scopedHistory = accountKey
+    ? history.filter((h) => h.accountKey === accountKey).slice(0, 24)
+    : [];
+
   return {
     available: pools.length > 0,
+    signedOut: false,
     planName,
+    account,
+    activeAccount: account,
+    knownAccountCount,
+    trackingStartedAtSec: ledgerState.trackingStartedAtSec,
     fetchedAtIso: new Date(quotaCache.fetchedAtMs || Date.now()).toISOString(),
     pools,
-    history: history.slice(0, 24),
+    history: scopedHistory,
+    allHistory: history.slice(0, 36),
   };
+}
+
+async function getQuotaSnapshot(force = false) {
+  if (force || !quotaInFlight) {
+    quotaInFlight = computeQuotaSnapshot(force).finally(() => {
+      quotaInFlight = null;
+    });
+  }
+  return quotaInFlight;
 }
 
 // ---------------------------------------------------------------------------
 // Global Stats & Backend Model Speed Leaderboard (`/api/global`)
 // ---------------------------------------------------------------------------
 
-async function buildGlobalStats(range = '7d') {
+async function buildGlobalStats(range = '7d', accountScope = 'current') {
   const quota = await getQuotaSnapshot(false);
   const nowSec = Date.now() / 1000;
   let minTs = 0;
@@ -1668,6 +1847,11 @@ async function buildGlobalStats(range = '7d') {
     minTs = nowSec - 7 * 86400;
   }
 
+  const activeAccount = quota.activeAccount || null;
+  const activeKey = activeAccount?.accountKey || '';
+  const resolvedScope = accountScope === 'all' ? 'all' : 'current';
+  const filterByActiveAccount = resolvedScope === 'current' && Boolean(activeKey);
+
   const convDir = join(APP_DATA_DIR, 'conversations');
   const modelMap = new Map();
   let sessionCount = 0;
@@ -1676,18 +1860,14 @@ async function buildGlobalStats(range = '7d') {
   let totalEff = 0, totalStd = 0;
 
   for (const id of listAllConversationIds()) {
+    if (filterByActiveAccount) {
+      const convLedger = ledgerState.conversations?.[id];
+      if (!convLedger || !convLedger.ranges?.some((r) => r.accountKey === activeKey)) continue;
+    }
+
     if (minTs > 0) {
-      try {
-        const dbPath = join(convDir, `${id}.db`);
-        let maxMtime = statSync(dbPath).mtimeMs / 1000;
-        try {
-          const wm = statSync(`${dbPath}-wal`).mtimeMs / 1000;
-          if (wm > maxMtime) maxMtime = wm;
-        } catch { /* ignore */ }
-        if (maxMtime < minTs - 300) continue;
-      } catch {
-        continue;
-      }
+      const maxMtime = maxConvMtimeMs(convDir, id) / 1000;
+      if (!maxMtime || maxMtime < minTs - 300) continue;
     }
 
     const light = getLightConversation(id);
@@ -1695,7 +1875,9 @@ async function buildGlobalStats(range = '7d') {
 
     let sessionMatched = false;
     for (const g of light.gens) {
-      if (minTs > 0 && g.createdAt < minTs) continue;
+      const refTs = g.completedAt > 0 ? g.completedAt : g.createdAt;
+      if (minTs > 0 && refTs < minTs) continue;
+      if (filterByActiveAccount && lookupGenAccount(ledgerState, id, g.genIdx) !== activeKey) continue;
       sessionMatched = true;
       totalGens++;
       totalIn += g.inputTokens;
@@ -1777,6 +1959,10 @@ async function buildGlobalStats(range = '7d') {
   return {
     range,
     minTs,
+    accountScope: resolvedScope,
+    activeAccount,
+    knownAccountCount: quota.knownAccountCount || 0,
+    trackingStartedAtSec: quota.trackingStartedAtSec || ledgerState.trackingStartedAtSec,
     totals: {
       sessionCount,
       genCount: totalGens,
@@ -1789,12 +1975,12 @@ async function buildGlobalStats(range = '7d') {
       costStandard: totalStd,
     },
     models,
-    quotaHistory: quota.history || [],
+    quotaHistory: resolvedScope === 'all' ? (quota.allHistory || []) : (quota.history || []),
   };
 }
 
 // ---------------------------------------------------------------------------
-// Sidecar HTTP Server Registration
+// Sidecar HTTP Server Registration & Background Attribution Poller
 // ---------------------------------------------------------------------------
 
 const app = new SidecarApp();
@@ -1844,6 +2030,7 @@ app.api('/api/session', async (data) => {
     detail?.liveState?.state || 'idle',
     Math.floor((detail?.liveState?.elapsedSec || 0)),
     tree?.totals?.genCount || 0,
+    quota.activeAccount?.accountKey || (quota.signedOut ? 'signed_out' : ''),
     quota.fetchedAtIso || '',
   ].join('|');
 
@@ -1870,7 +2057,25 @@ app.api('/api/sessions', (data) => {
 
 app.api('/api/global', async (data) => {
   const range = ['5h', '7d', 'all'].includes(data.range) ? data.range : '7d';
-  return buildGlobalStats(range);
+  const accountScope = ['current', 'all'].includes(data.accountScope) ? data.accountScope : 'current';
+  return buildGlobalStats(range, accountScope);
 }, 'GET');
 
-app.run();
+let bgTrackerBusy = false;
+async function runBackgroundLedgerTick() {
+  if (bgTrackerBusy) return;
+  bgTrackerBusy = true;
+  try {
+    await getQuotaSnapshot(false);
+  } catch {
+    // non-fatal
+  } finally {
+    bgTrackerBusy = false;
+  }
+}
+
+app.run().then(() => {
+  runBackgroundLedgerTick();
+  const timer = setInterval(runBackgroundLedgerTick, 12_000);
+  timer.unref?.();
+});

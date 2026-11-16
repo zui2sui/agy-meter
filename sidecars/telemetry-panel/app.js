@@ -28,6 +28,8 @@
     breakdownMode: (safeGet('am_breakdown_mode') ?? safeGet('ts_breakdown_mode')) === 'tokens' ? 'tokens' : 'cost',
     activeTab: 'session',
     globalRange: safeGet('am_global_range') || safeGet('ts_global_range') || '5h',
+    accountScope: safeGet('am_account_scope') === 'all' ? 'all' : 'current',
+    lastAccountKey: '',
     expandedTurns: new Set(),
     autoExpandedConv: '',
     autoExpandedMaxTurn: 0,
@@ -66,7 +68,8 @@
       noSessionData: '暂无会话数据',
       waitingGen: '等待生成',
       // Quota strip
-      qHeadTip: '按公开 API 单价折算的当前窗口等效消耗 / 100% 满额线性外推参考值（非官方内部计费权重）',
+      qHeadTip: '按公开 API 单价折算的当前窗口等效消耗 / 100% 满额线性外推参考值（已按账号隔离归因；* 表示窗口开启于多账号追踪启用前，仅计启用后已归因花费并按增量推算满额）',
+      qAcctTip: (lbl) => `当前登录账号：${lbl}`,
       qColPool: '额度',
       qColRem: '剩余',
       qColUsed: '已用',
@@ -75,10 +78,13 @@
       scopeWk: '本周',
       scope5h: '本轮',
       estLowSample: '消耗较少暂无法推算满额',
+      estLowPartialSample: '该窗口开启于账本启用前，等待新消耗达阈值后按增量推算满额',
       estExtrapolated: (usedPct, val) => `按已消耗 ${usedPct}% 推算 100% 满额 ≈ ${val}`,
-      estFallback: (val) => `参考上次满额估值 ≈ ${val}`,
-      qRowTip: (name, win, remPct, cd, scope, used, est) =>
-        `${name} ${win}额度 · 剩余 ${remPct}% (${cd}后重置) · ${scope}已用 ${used} · ${est}`,
+      estPartialExtrapolated: (deltaPct, val) => `过渡窗口：按开启追踪后新增消耗 ${deltaPct}% 增量推算满额 ≈ ${val}`,
+      estFallback: (val) => `参考同账号上次满额估值 ≈ ${val}`,
+      qPartialTag: '（仅计追踪启用后已归因调用）',
+      qRowTip: (name, win, remPct, cd, scope, used, est, partialTag = '') =>
+        `${name} ${win}额度 · 剩余 ${remPct}% (${cd}后重置) · ${scope}已用 ${used}${partialTag} · ${est}`,
       qBarAria: (name, win) => `${name} ${win}剩余额度`,
       // Session status & hero
       stTool: (name) => `执行工具 ${name}`,
@@ -151,6 +157,10 @@
       globEmpty: '该范围内暂无数据',
       globRangeTitle: '统计范围',
       globRangeAria: '时间范围',
+      globAcctTitle: '账号视角',
+      globAcctAria: '账号统计范围',
+      globAcctCur: '当前账号',
+      globAcctAll: '全部',
       globR5h: '本轮 5h',
       globR7d: '近 7 天',
       globRAll: '全部',
@@ -163,6 +173,8 @@
       globPillOut: '输出',
       globPillHit: '缓存',
       histTitle: '额度窗口记录',
+      histLegacyAcct: '旧记录(未分号)',
+      histPartialTip: (deltaPct) => `过渡窗口按开启追踪后新增 ${deltaPct}% 增量推算`,
       histColPool: '额度',
       histColReset: '重置时间',
       histColUsedPct: '已耗比例',
@@ -199,7 +211,8 @@
       noSessionData: 'No session data',
       waitingGen: 'Waiting for output',
       // Quota strip
-      qHeadTip: 'Current window spend at public API rates / linearly extrapolated 100% full-window value (reference only, not internal quota weights)',
+      qHeadTip: 'Current window spend at public API rates / linearly extrapolated 100% value (isolated per account; * = window opened before ledger tracking began, showing post-tracking spend and delta estimate)',
+      qAcctTip: (lbl) => `Signed-in account: ${lbl}`,
       qColPool: 'Pool',
       qColRem: 'Left',
       qColUsed: 'Used',
@@ -208,10 +221,13 @@
       scopeWk: 'Weekly',
       scope5h: 'Window',
       estLowSample: 'Too little usage to extrapolate full window',
+      estLowPartialSample: 'Pre-tracking window; waiting for delta usage threshold to extrapolate',
       estExtrapolated: (usedPct, val) => `Extrapolated 100% value from ${usedPct}% used ≈ ${val}`,
-      estFallback: (val) => `Previous window reference ≈ ${val}`,
-      qRowTip: (name, win, remPct, cd, scope, used, est) =>
-        `${name} ${win} quota · ${remPct}% left (resets in ${cd}) · ${scope} used ${used} · ${est}`,
+      estPartialExtrapolated: (deltaPct, val) => `Transitional window: extrapolated from +${deltaPct}% post-tracking delta ≈ ${val}`,
+      estFallback: (val) => `Same-account previous window reference ≈ ${val}`,
+      qPartialTag: ' (post-tracking attributed only)',
+      qRowTip: (name, win, remPct, cd, scope, used, est, partialTag = '') =>
+        `${name} ${win} quota · ${remPct}% left (resets in ${cd}) · ${scope} used ${used}${partialTag} · ${est}`,
       qBarAria: (name, win) => `${name} ${win} remaining quota`,
       // Session status & hero
       stTool: (name) => `Running ${name}`,
@@ -284,6 +300,10 @@
       globEmpty: 'No data in this range',
       globRangeTitle: 'Time Range',
       globRangeAria: 'Time range',
+      globAcctTitle: 'Account Scope',
+      globAcctAria: 'Account scope',
+      globAcctCur: 'Current',
+      globAcctAll: 'All',
       globR5h: '5h Win',
       globR7d: '7 Days',
       globRAll: 'All',
@@ -296,6 +316,8 @@
       globPillOut: 'Out',
       globPillHit: 'Cache',
       histTitle: 'Quota Window History',
+      histLegacyAcct: 'Legacy (unscoped)',
+      histPartialTip: (deltaPct) => `Transitional window extrapolated from +${deltaPct}% post-tracking delta`,
       histColPool: 'Pool',
       histColReset: 'Reset',
       histColUsedPct: 'Used %',
@@ -538,10 +560,14 @@
     }
 
     const elapsed = state.receivedAtMs > 0 ? Math.max(0, (Date.now() - state.receivedAtMs) / 1000) : 0;
+    const acctLabel = data?.quota?.account?.accountLabel || '';
+    const acctBadgeHtml = acctLabel
+      ? `<span class="q-h-acct" title="${esc(t.qAcctTip(acctLabel))}">${esc(acctLabel)}</span>`
+      : '';
 
     const headHtml = `
       <div class="q-head" aria-hidden="true" title="${esc(t.qHeadTip)}">
-        <span class="q-h-pool">${esc(t.qColPool)}</span>
+        <span class="q-h-pool"><span>${esc(t.qColPool)}</span>${acctBadgeHtml}</span>
         <span class="q-h-rem">${esc(t.qColRem)}</span>
         <span class="q-h-used">${esc(t.qColUsed)}</span>
         <span class="q-h-slash">/</span>
@@ -565,19 +591,28 @@
         const isWk = b.window === 'weekly';
         const winLabel = isWk ? t.winWk : '5h';
         const scopeWord = isWk ? t.scopeWk : t.scope5h;
+        const isPartial = Boolean(b.isPartialWindow);
         const usedStr = fmtUsd(spend);
 
         let estHtml = `<span class="q-est dim">—</span>`;
-        let estTip = t.estLowSample;
+        let estTip = isPartial ? t.estLowPartialSample : t.estLowSample;
         if (b.sampleReady && fullVal > 0) {
           estHtml = `<span class="q-est">${esc(fmtUsd(fullVal))}</span>`;
-          estTip = t.estExtrapolated((100 - remPct).toFixed(1), fmtUsd(fullVal));
+          if (isPartial && b.deltaUsedFraction > 0) {
+            estTip = t.estPartialExtrapolated((b.deltaUsedFraction * 100).toFixed(1), fmtUsd(fullVal));
+          } else {
+            estTip = t.estExtrapolated((100 - remPct).toFixed(1), fmtUsd(fullVal));
+          }
         } else if (fallback > 0) {
           estHtml = `<span class="q-est dim">≈${esc(fmtUsd(fallback))}</span>`;
           estTip = t.estFallback(fmtUsd(fallback));
         }
 
-        const rowTip = t.qRowTip(shortName, winLabel, remPct.toFixed(1), fmtCountdown(remSec), scopeWord, usedStr, estTip);
+        const partialTag = isPartial ? t.qPartialTag : '';
+        const rowTip = t.qRowTip(shortName, winLabel, remPct.toFixed(1), fmtCountdown(remSec), scopeWord, usedStr, estTip, partialTag);
+        const usedHtml = isPartial
+          ? `<span class="q-used is-partial">${esc(usedStr)}<sup class="q-used-mark" aria-hidden="true">*</sup></span>`
+          : `<span class="q-used">${esc(usedStr)}</span>`;
 
         return `
           <div class="q-row" title="${esc(rowTip)}">
@@ -585,7 +620,7 @@
             <span class="q-win ${isWk ? 'is-wk' : ''}">${esc(winLabel)}</span>
             <progress class="q-bar ${tone}" max="100" value="${Math.max(0, Math.min(100, remPct)).toFixed(1)}" aria-label="${esc(t.qBarAria(shortName, winLabel))}"></progress>
             <span class="q-pct">${Math.round(remPct)}%</span>
-            <span class="q-used">${esc(usedStr)}</span>
+            ${usedHtml}
             <span class="q-slash" aria-hidden="true">/</span>
             ${estHtml}
           </div>
@@ -1095,44 +1130,66 @@
 
     const models = g.models || [];
     const maxRate = Math.max(50, ...models.map((m) => m.streamP50 || m.e2eP50 || 0));
-    const hist = g.quotaHistory || state.payload?.quota?.history || [];
+    const scope = g.accountScope || state.accountScope;
+    const hist = g.quotaHistory ?? (scope === 'all' ? (state.payload?.quota?.allHistory || []) : (state.payload?.quota?.history || []));
+    const activeAcctLabel = g.activeAccount?.accountLabel || state.payload?.quota?.account?.accountLabel || '';
 
     const histHtml = !hist.length ? '' : `
-      <div class="section-bar" style="margin-top:4px"><h3 class="section-title">${esc(t.histTitle)}</h3></div>
+      <div class="section-bar" style="margin-top:4px"><h3 id="hist-section-title" class="section-title">${esc(t.histTitle)}</h3></div>
       <div class="card" style="padding:8px 10px">
-        <table class="hist">
-          <thead>
-            <tr><th scope="col">${esc(t.histColPool)}</th><th scope="col">${esc(t.histColReset)}</th><th scope="col">${esc(t.histColUsedPct)}</th><th scope="col" class="u">${esc(t.histColUsed)}</th><th scope="col" class="s" aria-hidden="true">/</th><th scope="col" class="v">${esc(t.histColEst)}</th></tr>
-          </thead>
-          <tbody>
-            ${hist.slice(0, 12).map((h) => {
-              const sp = state.priceMode === 'standard' ? h.spendStandard : h.spendEffective;
-              const fv = state.priceMode === 'standard' ? h.fullValueStandard : h.fullValueEffective;
-              const pLabel = fmtPoolName(h.poolKey);
-              const wLabel = h.windowType === 'weekly' ? t.winWk : '5h';
-              return `
-                <tr>
-                  <td class="num">${esc(`${pLabel} ${wLabel}`)}</td>
-                  <td class="num">${esc(fmtShortTime(h.resetTimeIso))}</td>
-                  <td class="num">${((h.usedFraction || 0) * 100).toFixed(1)}%</td>
-                  <td class="u">${esc(fmtUsd(sp))}</td>
-                  <td class="s" aria-hidden="true">/</td>
-                  <td class="v">${esc(fmtUsd(fv))}</td>
-                </tr>
-              `;
-            }).join('')}
-          </tbody>
-        </table>
+        <div tabindex="0" role="region" aria-labelledby="hist-section-title" class="table-wrapper">
+          <table class="hist">
+            <caption class="visually-hidden">${esc(t.histTitle)}</caption>
+            <thead>
+              <tr><th scope="col">${esc(t.histColPool)}</th><th scope="col">${esc(t.histColReset)}</th><th scope="col">${esc(t.histColUsedPct)}</th><th scope="col" class="u">${esc(t.histColUsed)}</th><th scope="col" class="s" aria-hidden="true">/</th><th scope="col" class="v">${esc(t.histColEst)}</th></tr>
+            </thead>
+            <tbody>
+              ${hist.slice(0, 14).map((h) => {
+                const sp = state.priceMode === 'standard' ? h.spendStandard : h.spendEffective;
+                const fv = state.priceMode === 'standard' ? h.fullValueStandard : h.fullValueEffective;
+                const pLabel = fmtPoolName(h.poolKey);
+                const wLabel = h.windowType === 'weekly' ? t.winWk : '5h';
+                const acctText = h.accountKey === 'legacy'
+                  ? t.histLegacyAcct
+                  : (h.accountLabel || h.planName || '');
+                const showAcct = (scope === 'all' || h.accountKey === 'legacy') && acctText;
+                const isPartial = Boolean(h.isPartialWindow && h.deltaUsedFraction > 0);
+                const usedPctText = isPartial
+                  ? `Δ${(h.deltaUsedFraction * 100).toFixed(1)}%`
+                  : `${((h.usedFraction || 0) * 100).toFixed(1)}%`;
+                const rowTip = isPartial ? t.histPartialTip((h.deltaUsedFraction * 100).toFixed(1)) : '';
+                return `
+                  <tr ${rowTip ? `title="${esc(rowTip)}"` : ''}>
+                    <th scope="row">${esc(`${pLabel} ${wLabel}`)}${showAcct ? `<span class="hist-acct">${esc(acctText)}</span>` : ''}</th>
+                    <td class="num">${esc(fmtShortTime(h.resetTimeIso))}</td>
+                    <td class="num">${esc(usedPctText)}</td>
+                    <td class="u">${esc(fmtUsd(sp))}${isPartial ? '<sup class="q-used-mark" aria-hidden="true">*</sup>' : ''}</td>
+                    <td class="s" aria-hidden="true">/</td>
+                    <td class="v">${esc(fmtUsd(fv))}</td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
       </div>
     `;
 
     el.innerHTML = `
       <div class="section-bar">
+        <h3 class="section-title">${esc(t.globAcctTitle)}${activeAcctLabel ? ` · ${esc(activeAcctLabel)}` : ''}</h3>
+        <div class="seg-control" role="group" aria-label="${esc(t.globAcctAria)}">
+          <button type="button" class="seg-btn ${scope === 'current' ? 'is-active' : ''}" data-acct-scope="current" aria-pressed="${scope === 'current' ? 'true' : 'false'}">${esc(t.globAcctCur)}</button>
+          <button type="button" class="seg-btn ${scope === 'all' ? 'is-active' : ''}" data-acct-scope="all" aria-pressed="${scope === 'all' ? 'true' : 'false'}">${esc(t.globAcctAll)}</button>
+        </div>
+      </div>
+
+      <div class="section-bar">
         <h3 class="section-title">${esc(t.globRangeTitle)}</h3>
         <div class="seg-control" role="group" aria-label="${esc(t.globRangeAria)}">
-          <button type="button" class="seg-btn ${state.globalRange === '5h' ? 'is-active' : ''}" data-range="5h">${esc(t.globR5h)}</button>
-          <button type="button" class="seg-btn ${state.globalRange === '7d' ? 'is-active' : ''}" data-range="7d">${esc(t.globR7d)}</button>
-          <button type="button" class="seg-btn ${state.globalRange === 'all' ? 'is-active' : ''}" data-range="all">${esc(t.globRAll)}</button>
+          <button type="button" class="seg-btn ${state.globalRange === '5h' ? 'is-active' : ''}" data-range="5h" aria-pressed="${state.globalRange === '5h' ? 'true' : 'false'}">${esc(t.globR5h)}</button>
+          <button type="button" class="seg-btn ${state.globalRange === '7d' ? 'is-active' : ''}" data-range="7d" aria-pressed="${state.globalRange === '7d' ? 'true' : 'false'}">${esc(t.globR7d)}</button>
+          <button type="button" class="seg-btn ${state.globalRange === 'all' ? 'is-active' : ''}" data-range="all" aria-pressed="${state.globalRange === 'all' ? 'true' : 'false'}">${esc(t.globRAll)}</button>
         </div>
       </div>
 
@@ -1260,7 +1317,7 @@
   // ---------- Polling ----------
   async function fetchGlobal() {
     try {
-      state.globalPayload = await apiGet(`/api/global?range=${encodeURIComponent(state.globalRange)}`);
+      state.globalPayload = await apiGet(`/api/global?range=${encodeURIComponent(state.globalRange)}&accountScope=${encodeURIComponent(state.accountScope)}`);
       renderGlobalTab();
     } catch {
       $('global-view').innerHTML = `<div class="empty">${esc(tr().globError)}</div>`;
@@ -1285,11 +1342,14 @@
         state.uiBuild = res.uiBuild;
       }
       if (!res.unchanged) {
+        const nextAcctKey = res.quota?.account?.accountKey || '';
+        const acctChanged = Boolean(state.lastAccountKey && nextAcctKey && state.lastAccountKey !== nextAcctKey);
+        if (nextAcctKey) state.lastAccountKey = nextAcctKey;
         state.etag = res.etag || '';
         state.payload = res;
         state.receivedAtMs = Date.now();
         renderAll();
-        if (force && state.activeTab === 'global') fetchGlobal();
+        if ((force || acctChanged) && state.activeTab === 'global') fetchGlobal();
       }
     } catch {
       // keep existing UI
@@ -1387,6 +1447,18 @@
         if (state.expandedTurns.has(n)) state.expandedTurns.delete(n);
         else state.expandedTurns.add(n);
         renderSessionTab();
+        return;
+      }
+
+      const asc = e.target.closest('[data-acct-scope]');
+      if (asc) {
+        const nextScope = asc.dataset.acctScope === 'all' ? 'all' : 'current';
+        if (state.accountScope !== nextScope) {
+          state.accountScope = nextScope;
+          safeSet('am_account_scope', nextScope);
+          $('global-view').innerHTML = `<div class="empty">${esc(tr().globRefreshing)}</div>`;
+          fetchGlobal();
+        }
         return;
       }
 

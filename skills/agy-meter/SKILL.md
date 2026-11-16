@@ -29,4 +29,4 @@ Check that `agy-meter` is enabled, then surface the exact clickable `sidecar://`
 - **Tab 2 — Subagent Tree (`子智能体`)**:
   - Full parent-child topology across Subagents, Browser Agents, and Swarm Workers with aggregated tree output tokens and USD cost, clickable to inspect any child session.
 - **Tab 3 — Global Stats & Speed Leaderboard (`全局`)**:
-  - Filterable by **Current 5h Window (`本轮 5h`) / Last 7 Days (`近 7 天`) / All Time (`全部`)**, ranking backend model IDs by steady-state median `tok/s`, output tokens, cache hit rate, and cumulative API spend, plus persistent quota window valuation history (`额度窗口记录`).
+  - Filterable by **Account Scope (`当前账号` / `全部`)** and **Time Range (`本轮 5h` / `近 7 天` / `全部`)**, ranking backend model IDs by steady-state median `tok/s`, output tokens, cache hit rate, and cumulative API spend, plus account-isolated persistent quota window valuation history (`额度窗口记录`).

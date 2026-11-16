@@ -185,8 +185,22 @@ input::placeholder { color: var(--fg-subtle); }
   align-items: center;
 }
 .q-head { font-size: 10.5px; color: var(--fg-subtle); font-weight: 500; padding-block-end: 1px; cursor: help; }
-.q-h-pool { grid-column: 1 / 3; }
-.q-h-rem { grid-column: 3 / 5; text-align: right; }
+.q-h-pool { grid-column: 1 / 4; display: flex; align-items: center; gap: 5px; min-width: 0; }
+.q-h-acct {
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.35;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--fill);
+  border: 1px solid var(--line);
+  color: var(--fg-soft);
+  max-width: 110px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.q-h-rem { grid-column: 4; text-align: right; white-space: nowrap; }
 .q-h-used { grid-column: 5; text-align: right; padding-inline-start: 4px; white-space: nowrap; }
 .q-h-slash { grid-column: 6; text-align: center; font-family: var(--mono); }
 .q-h-est { grid-column: 7; text-align: right; white-space: nowrap; }
@@ -228,6 +242,8 @@ progress.q-bar::-moz-progress-bar {
 
 .q-pct { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--fg); text-align: right; }
 .q-used { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--fg); font-weight: 600; text-align: right; padding-inline-start: 4px; white-space: nowrap; }
+.q-used.is-partial { color: var(--fg-soft); }
+.q-used-mark { font-weight: 700; color: var(--amber); margin-inline-start: 1px; }
 .q-slash { font-family: var(--mono); color: var(--fg-subtle); font-weight: 400; text-align: center; }
 .q-est { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--accent-ink); font-weight: 700; text-align: right; white-space: nowrap; }
 .q-est.dim { color: var(--fg-subtle); font-weight: 500; }
@@ -549,9 +565,12 @@ progress.q-bar::-moz-progress-bar {
 .lb-pill.hit b { color: var(--green-ink); }
 .lb-meta .cost { margin-left: auto; font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 13px; font-weight: 700; color: var(--fg); }
 
+.table-wrapper { overflow-x: auto; max-inline-size: 100%; container-type: inline-size; }
 .hist { width: 100%; border-collapse: collapse; font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .hist th, .hist td { padding: 6px 4px; border-bottom: 1px solid var(--line); text-align: left; color: var(--fg); white-space: nowrap; }
 .hist th { color: var(--fg-soft); font-weight: 500; }
+.hist tbody th { font-weight: 600; font-family: var(--mono); }
+.hist-acct { display: block; font-family: var(--font); font-size: 10px; font-weight: 500; color: var(--fg-subtle); line-height: 1.25; }
 .hist th.u, .hist td.u { text-align: right; padding-inline-end: 2px; }
 .hist td.u { font-family: var(--mono); font-weight: 600; }
 .hist th.s, .hist td.s { text-align: center; padding-inline: 2px; color: var(--fg-subtle); font-family: var(--mono); width: 1%; }

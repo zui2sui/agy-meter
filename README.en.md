@@ -15,9 +15,10 @@
 
 - **Instant Bilingual Toggle (`中 | EN`)**
   - Automatically matches Chinese or English from system locale on first launch, with a top-bar `中 | EN` toggle that switches every label, chart, tooltip, and status message in place without reloading.
-- **Top Plan Quota Strip (`5h` / `Weekly` / `Pro Argon` Pool)**
+- **Top Plan Quota Strip (`5h` / `Weekly` / `Pro Argon` + Account Isolation)**
   - Automatically detects `Gemini` (`5h` + `Weekly`), `Claude` (`5h` + `Weekly`), and separate `Argon` weekly pools on Pro plans (dynamically folding Argon into the shared Gemini pool when merged on Ultra/shared plans).
   - Shows live remaining `%`, reset countdown, and **`Used / Est.` equivalent API USD value** for each window (switchable between **Promo / Effective** rates and **Standard List** rates).
+  - **Multi-Account Attribution Isolation**: Silently maintains an anonymized local ledger (`account_ledger.json`, storing only truncated SHA-256 email digests—never plaintext emails) so switching across Pro / Ultra accounts isolates spend and history per account. For already-open transitional windows started before ledger tracking began, pre-tracking spend is excluded (marked `*`) and `Est.` switches cleanly to baseline delta extrapolation until the next reset.
 - **Live Session Telemetry (`Session` Tab)**
   - Side-by-side **Stream Speed (`tok/s`)**, **End-to-End Speed (`tok/s`)**, and **Session Cost Estimate (`$`)**, automatically flagging server-buffered short bursts (`Buf`).
   - Displays the exact routed backend `modelId` badge for every LLM hop.
@@ -27,7 +28,7 @@
 - **Subagent Topology Tree (`Subagents` Tab)**
   - Aggregates parent-child trees across Subagents, Browser Agents, and Swarm workers with total tree output tokens and equivalent USD cost; click any node to inspect its session directly.
 - **Global Stats & Model Speed Leaderboard (`Global` Tab)**
-  - Aggregates input, cache-read, and output tokens, cache hit rate, and steady-state median (`P50`) decode speed per backend model across `5h Win / 7 Days / All`, plus persistent quota window valuation history.
+  - Filterable by **Account Scope (`Current` / `All`)** and **Time Range (`5h Win` / `7 Days` / `All`)**, aggregating input, cache-read, and output tokens, cache hit rate, and steady-state median (`P50`) decode speed per backend model alongside account-labeled quota window valuation history.
 
 ---
 
